@@ -1,0 +1,104 @@
+pipeline {
+    // Template hardware-in-the-loop (HIL) test pipeline (dojo ADR 001). Runs
+    // the scaffold in tests/automated/ against a target that's already been
+    // flashed/booted by an earlier, separate step - this pipeline does not
+    // provision or flash the unit itself.
+    //
+    // Placeholders to fill in before this runs (search for <...>):
+    //   <AGENT_LABEL>                  - the Jenkins agent/node this must run on
+    //   <SSH_PASSWORD_CREDENTIAL_ID>   - Jenkins credential ID for DOJO_SSH_PASSWORD
+    //   <REPO_URL> / <REPO_BRANCH> / <REPO_CREDENTIAL_ID> - Checkout stage below
+
+    parameters {
+        string name: "TARGET_HOST", defaultValue: "192.168.1.100",
+            description: "address of the target under test"
+    }
+
+    agent { node { label "<AGENT_LABEL>" } }
+
+    environment {
+        DOJO_SSH_PASSWORD = credentials('<SSH_PASSWORD_CREDENTIAL_ID>')
+        // uv's default install location, in case the agent doesn't have it preinstalled
+        PATH = "${env.HOME}/.local/bin:${env.PATH}"
+    }
+
+    options {
+        disableConcurrentBuilds()
+    }
+
+    stages {
+        stage("Attestation") {
+            steps {
+                script {
+                    // Identify who started this run via Jenkins' own Cause API - no
+                    // extra plugin needed (UserIdCause is available on any Jenkins
+                    // instance new enough to run declarative pipeline).
+                    def userCauses = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')
+                    def triggeredBy = "unknown (non-interactive trigger)"
+                    if (userCauses && userCauses.size() > 0 && userCauses[0].userId) {
+                        triggeredBy = userCauses[0].userId
+                    }
+                    env.TRIGGERED_BY = triggeredBy
+                    currentBuild.displayName = "${BUILD_NUMBER} | ${env.TRIGGERED_BY}"
+                }
+            }
+        }
+
+        stage("Checkout") {
+            steps {
+                git url: '<REPO_URL>',
+                    branch: '<REPO_BRANCH>',
+                    credentialsId: '<REPO_CREDENTIAL_ID>'
+            }
+        }
+
+        stage("Setup") {
+            steps {
+                // Idempotent - the official installer skips reinstalling if uv is
+                // already present, so this is safe to run on every build.
+                sh "curl -LsSf https://astral.sh/uv/install.sh | sh"
+                dir("tests/automated") {
+                    sh "uv sync --all-groups"
+                }
+            }
+        }
+
+        stage("Fixture check") {
+            steps {
+                dir("tests/automated") {
+                    sh "uv run --active pytest -vv -m isTestFixtureOk --target-host=${params.TARGET_HOST} pre_test.py"
+                }
+            }
+        }
+
+        stage("Feature tests") {
+            steps {
+                dir("tests/automated") {
+                    // Runs every hardware-marked test the scaffold collects. Once
+                    // real feature test_*.py files exist, consider naming them
+                    // explicitly here (mirroring mos-docker's per-stage pattern)
+                    // if you want failures in one feature area to be visible as a
+                    // separate Jenkins stage rather than one combined stage.
+                    sh """
+                        uv run --active pytest -vv -m hardware --target-host=${params.TARGET_HOST} \
+                            --html=../output/report.html --self-contained-html \
+                            --junitxml=../output/junit.xml
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                currentBuild.description = "Triggered by: ${env.TRIGGERED_BY ?: 'unknown'}"
+            }
+            archiveArtifacts artifacts: 'tests/output/**', fingerprint: false, allowEmptyArchive: true
+            // Jenkins' native Test Result page reads this directly - unlike report.html,
+            // it isn't subject to the artifact browser's CSP (dojo ADR 001 / mos-docker
+            // ADR 014), so test name/pass-fail/duration show up regardless of that setting.
+            junit testResults: 'tests/output/*junit.xml', allowEmptyResults: true
+        }
+    }
+}

@@ -1,0 +1,33 @@
+[project]
+name = "dojo-automated-tests"
+version = "0.0.1"
+description = "Scaffold pytest suite for embedded hardware-in-the-loop (HIL) testing (ADR 001)"
+readme = "readme.md"
+requires-python = ">=3.10"
+dependencies = [
+    "paramiko==3.5.0",
+    "pyserial==3.5",
+    "scp==0.15.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==8.3.4",
+    "pytest-html",
+    "pytest-order",
+    "pytest-timeout",
+]
+
+[tool.uv]
+# optional uv-specific configuration can go here
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers"
+# without this, captured stdout (including the step fixture's narration) is
+# dropped from --junitxml entirely
+junit_logging = "system-out"
+markers = [
+    "isTestFixtureOk: test if the test fixture is okay",
+    "smokeTest: test if simple things are okay",
+    "hardware: tests that require real hardware attached (e.g. serial device, target board)",
+]
