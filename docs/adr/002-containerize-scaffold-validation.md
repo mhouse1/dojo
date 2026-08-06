@@ -64,7 +64,7 @@ Two details are load-bearing enough to state explicitly:
   container writing into the bind-mounted workspace leaves root-owned test output that the next
   build's checkout cannot delete — a failure mode SleepyDog's pipeline works around after the fact
   with a root `rm -rf`. Matching the uid avoids creating the problem.
-- **The venv lives at `/opt/dojo-venv`, outside the bind mount** (`UV_PROJECT_ENVIRONMENT`,
+- **The venv lives at `/opt/dojo/venv`, outside the bind mount** (`UV_PROJECT_ENVIRONMENT`,
   `VIRTUAL_ENV`). A `.venv` inside `/workspace` would clobber, or be clobbered by, the developer's
   host venv when run locally, and would leave a large directory behind in the Jenkins workspace
   after every build. The scaffold Makefile's `uv run --active` resolves to this environment

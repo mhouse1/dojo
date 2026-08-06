@@ -64,9 +64,24 @@ docker compose -f docker/docker-compose.yml run --rm dojo-dev make r
 ```
 
 `Jenkinsfile.docker` (repo root) is dojo's own CI pipeline and runs exactly those two commands on
-the VEDA Jenkins controller as the `Dojo-Docker` job, publishing `source/tests/output/junit.xml`.
-It is **not** `source/Jenkinsfile`, which is the placeholder-laden HIL template consuming projects
-copy. See `docs/adr/002-containerize-scaffold-validation.md`.
+the VEDA Jenkins controller as the `Dojo-Docker` job, publishing the resulting `junit.xml`. It is
+**not** `source/Jenkinsfile`, which is the placeholder-laden HIL template consuming projects copy.
+See `docs/adr/002-containerize-scaffold-validation.md`.
+
+### Against another Python
+
+The scaffold develops on the interpreter `source/tests/automated/.python-version` pins (3.14) and
+supports `>=3.10`. Any other interpreter needs no edit anywhere — set `PYTHON_VERSION`:
+
+```
+PYTHON_VERSION=3.12 docker compose -f docker/docker-compose.yml build dojo-dev
+PYTHON_VERSION=3.12 docker compose -f docker/docker-compose.yml run --rm dojo-dev make r
+```
+
+In CI the same thing is the `PYTHON_VERSIONS` build parameter: empty (the default) runs one cell on
+the pinned interpreter, and `3.10,3.12,3.14` fans out one parallel cell each. Both paths verify the
+interpreter that actually ran rather than the one requested — see
+`docs/adr/003-python-version-baseline-and-matrix.md` for why that check exists.
 
 ## Where to look next
 
@@ -76,3 +91,5 @@ copy. See `docs/adr/002-containerize-scaffold-validation.md`.
 - The test scaffold's component-by-component design: `docs/hldd/001-automated-test-scaffold.md`
 - Why dojo's own validation runs in a container:
   `docs/adr/002-containerize-scaffold-validation.md`
+- Which Python versions are supported, and how to check another:
+  `docs/adr/003-python-version-baseline-and-matrix.md`

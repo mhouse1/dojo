@@ -13,7 +13,7 @@ this_script_location = os.path.dirname(os.path.realpath(__file__))
 parent_folder = os.path.dirname(os.path.dirname(this_script_location))
 
 # dont forget to also update the CHANGELOG.md file so we can track chages to the test suite
-automated_test_version = '0.0.2'
+automated_test_version = '0.0.3'
 time_date = datetime.date.today()
 time_now = f"{datetime.datetime.now()}"
 

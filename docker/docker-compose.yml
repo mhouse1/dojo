@@ -1,19 +1,33 @@
-# Dojo scaffold-validation container (docs/adr/002-containerize-scaffold-validation.md).
+# Dojo scaffold-validation container (docs/adr/002-containerize-scaffold-validation.md,
+# multi-version matrix per docs/adr/003-python-version-baseline-and-matrix.md).
 #
-# Local use:
+# Local use - whatever source/tests/automated/.python-version pins:
 #   docker compose -f docker/docker-compose.yml build dojo-dev
 #   docker compose -f docker/docker-compose.yml run --rm dojo-dev make r
 #
-# Jenkins (Jenkinsfile.docker) runs the exact same two commands - there is no
-# CI-only invocation path to drift out of sync with what developers run.
+# Against a different interpreter (nothing else changes):
+#   PYTHON_VERSION=3.12 docker compose -f docker/docker-compose.yml build dojo-dev
+#   PYTHON_VERSION=3.12 docker compose -f docker/docker-compose.yml run --rm dojo-dev make r
+#
+# Jenkins (Jenkinsfile.docker) runs those same commands, once per entry in its
+# PYTHON_VERSIONS parameter - there is no CI-only invocation path to drift out of
+# sync with what developers run.
 services:
   dojo-dev:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    # Explicit, so the image name is the same whatever the compose project is
-    # called (the Jenkins workspace directory name would otherwise prefix it).
-    image: dojo-dev
+      args:
+        # Empty unless the caller sets it, which is what makes the image fall
+        # back to .python-version. Do not give this a literal default here - it
+        # would be a second copy of the pinned version, free to drift from the
+        # real one.
+        PYTHON_VERSION: ${PYTHON_VERSION:-}
+    # Tagged per interpreter so matrix cells cannot overwrite each other's image
+    # (and so a cell can never run against the previous cell's Python). The
+    # default tag is 'pinned', not a version number, for the same
+    # no-second-copy-of-the-version reason as the build arg above.
+    image: dojo-dev:${PYTHON_VERSION:-pinned}
     volumes:
       - ..:/workspace
     working_dir: /workspace

@@ -20,6 +20,16 @@ uv sync --all-groups
 uv reads `.python-version` and downloads a matching interpreter automatically if one
 isn't already installed, so a separate pyenv setup is not required.
 
+This suite is developed against the interpreter `.python-version` pins (3.14) and supports
+`>=3.10`, as declared in `pyproject.toml` - the two are deliberately different, so a project on an
+older interpreter can still adopt the scaffold. To run against a different one, set `UV_PYTHON`
+(it outranks `.python-version`, including in the `uv sync` the Makefile targets run):
+```
+UV_PYTHON=3.12 make sync && UV_PYTHON=3.12 make swtest
+```
+See `docs/adr/003-python-version-baseline-and-matrix.md` (dojo repo) for what has actually been
+measured on which versions, and for the CI matrix that checks the supported range on demand.
+
 # Running tests
 ```
 uv run pytest -vv

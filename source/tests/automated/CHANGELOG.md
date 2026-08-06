@@ -1,6 +1,22 @@
 # Change log
 * maintain the same syntax for each version
 
+## 0.0.3 python baseline moved to 3.14 (docs/adr/003-python-version-baseline-and-matrix.md)
+* `.python-version` 3.10 -> 3.14. Measured first: the non-hardware suite passes unchanged on 3.11,
+  3.12, 3.13, 3.14 and 3.15.0rc1 with the committed pins, and on 3.14 with the newest available
+  dependencies (paramiko 5.0.0, pytest 9.1.1, cryptography 50.0.0). `uv.lock` did not need
+  regenerating - it is a universal lock and installs on 3.14 as committed.
+* `requires-python` stays `>=3.10`: what dojo develops against and what the scaffold supports are
+  deliberately different, so a project still on an older interpreter can adopt the scaffold. 3.10
+  itself reaches end of life in October 2026 - raise the floor then.
+* removed the `request.node._store` write from the `step` fixture. It used pytest's private stash
+  (the public API is `node.stash`), and nothing anywhere read the `hil_steps` value it stored - the
+  fixture's two real outputs are `print()` and `record_property()`, both unchanged. This was the
+  only private-API use in the scaffold, and so the thing most likely to break silently on a pytest
+  upgrade.
+* the suite can now be run against any interpreter without editing anything:
+  `PYTHON_VERSION=3.12 docker compose -f docker/docker-compose.yml run --rm dojo-dev make r`
+
 ## 0.0.2 power control (docs/research/001-np-05b-network-controlled-power-outlet.md)
 * added `power_control.py`: control of a Synaccess NP-05B network-switched PDU over either
   transport - local IP ethernet via the `cmd.cgi` HTTP API (stdlib only) or the USB serial console

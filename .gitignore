@@ -1,1 +1,4 @@
+# Generated test reports. The suffixed form is what a per-interpreter run writes
+# (make r OUTPUT_DIR=..., dojo ADR 003) - one directory per matrix cell.
 source/tests/output/*
+source/tests/output-*/
