@@ -1,0 +1,21 @@
+# Dojo scaffold-validation container (docs/adr/002-containerize-scaffold-validation.md).
+#
+# Local use:
+#   docker compose -f docker/docker-compose.yml build dojo-dev
+#   docker compose -f docker/docker-compose.yml run --rm dojo-dev make r
+#
+# Jenkins (Jenkinsfile.docker) runs the exact same two commands - there is no
+# CI-only invocation path to drift out of sync with what developers run.
+services:
+  dojo-dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    # Explicit, so the image name is the same whatever the compose project is
+    # called (the Jenkins workspace directory name would otherwise prefix it).
+    image: dojo-dev
+    volumes:
+      - ..:/workspace
+    working_dir: /workspace
+    tty: true
+    stdin_open: true

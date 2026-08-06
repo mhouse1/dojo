@@ -80,6 +80,51 @@ CI job configuration. It ships unset - set it before running anything that opens
 DOJO_SSH_PASSWORD=<pw> make test
 ```
 
+# Power control
+`power_control.py` controls a Synaccess NP-05B network-switched PDU, over either transport - local
+IP ethernet (HTTP API, stdlib only) or the USB serial console (pyserial, already pinned). See
+`docs/research/001-np-05b-network-controlled-power-outlet.md` (dojo repo) for the command set it's
+built on.
+
+It's named for the function rather than the device class deliberately: "PDU" collides with Protocol
+Data Unit, which is the first reading an embedded engineer would reach for in a directory otherwise
+full of transport helpers.
+
+Use it from a test to power-cycle a target:
+```python
+import power_control
+with power_control.PduHttp('192.168.1.100') as p:
+    p.outlet_off(1)          # cut power to the DUT on outlet 1
+    p.outlet_on(1)           # restore it
+    p.all_off()              # or everything at once
+    print(p.outlet_states())
+```
+
+Or from the command line:
+```
+uv run python power_control.py status
+uv run python power_control.py on 1
+uv run python power_control.py off 1
+uv run python power_control.py reboot 1
+uv run python power_control.py cycle 1 --seconds 10
+uv run python power_control.py all-on --yes
+uv run python power_control.py all-off --yes
+uv run python power_control.py --serial /dev/ttyUSB1 status
+```
+
+`all-on` and `all-off` switch every outlet, so on a rig where several pipelines share one PDU they
+disturb other pipelines' targets. They prompt for confirmation at a terminal and require `--yes`
+when stdin isn't a tty, so a CI job can't quietly cut power to four other benches.
+
+Address and credentials come from `--host`/`--user`/`--password` or the `DOJO_POWER_HOST`,
+`DOJO_POWER_USER` and `DOJO_POWER_PASSWORD` environment variables, following the same
+env-var-over-hardcoding convention as `DOJO_SSH_PASSWORD` above. They fall back to the unit's
+factory `192.168.1.100` and `admin`/`admin` - change those on commissioning.
+
+It ships unvalidated against real hardware: the `$A5` response framing and the serial login
+handshake vary by firmware, and are isolated to `_parse_states()` and `PduSerial._login()` so a fix
+touches one place.
+
 # Adding a dependency
 ```
 uv add <package>          # runtime dependency

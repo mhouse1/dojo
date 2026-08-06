@@ -1,0 +1,147 @@
+// Dojo scaffold-validation CI for VEDA Jenkins.
+//
+// This is dojo's OWN pipeline - not to be confused with source/Jenkinsfile,
+// which is the placeholder-laden HIL template that consuming projects copy.
+// This one validates the thing dojo ships: it runs `make r` (uv sync + the
+// non-hardware pytest suite) inside a container built from nothing but Ubuntu,
+// so a green build proves the scaffold's documented setup still works on a
+// machine that has never seen this repo. No target hardware is involved -
+// hardware-marked tests are deselected by `make r` itself.
+//
+// Pipeline shape (agent any, Docker-first, SSH-deploy-key checkout, stage
+// timeouts) follows riker/kobayashi_maru's Jenkinsfile.docker so every job on
+// this controller reads the same way. See
+// docs/adr/002-containerize-scaffold-validation.md.
+
+pipeline {
+    agent any
+
+    parameters {
+        string(
+            name: 'TARGET_BRANCH',
+            defaultValue: 'main',
+            description: 'Git branch to validate'
+        )
+        booleanParam(
+            name: 'CLEAN_BUILD',
+            defaultValue: false,
+            description: 'Force a no-cache Docker rebuild - use when validating that the scaffold installs from scratch, not from cached uv/apt layers'
+        )
+    }
+
+    environment {
+        // NB: deliberately not named COMPOSE_FILE - docker compose reads that
+        // variable itself, which would make every command in this file depend on
+        // an implicit default instead of the -f flag it visibly passes.
+        DEV_IMAGE = 'dojo-dev'
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        disableConcurrentBuilds()
+        timeout(time: 30, unit: 'MINUTES')
+        timestamps()
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                timeout(time: 10, unit: 'MINUTES') {
+                    script {
+                        // The job's SCM must use an SSH deploy-key credential, not
+                        // HTTPS - GitHub has rejected password auth for git since
+                        // 2021, and the failure mode is an immediate elapsed=0s
+                        // build failure that looks like a Jenkins problem.
+                        checkout([
+                            $class: 'GitSCM',
+                            branches: [[name: "${params.TARGET_BRANCH}"]],
+                            userRemoteConfigs: scm.userRemoteConfigs
+                        ])
+                        sh 'git log --oneline -5'
+
+                        def commitMsg  = sh(script: 'git log -1 --pretty=%B', returnStdout: true).trim()
+                        def commitHash = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+
+                        // Attestation: who started this run, via Jenkins' own Cause
+                        // API (no extra plugin needed) - the practice dojo's own
+                        // source/Jenkinsfile template prescribes.
+                        def userCauses = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')
+                        env.TRIGGERED_BY = 'unknown (non-interactive trigger)'
+                        if (userCauses && userCauses.size() > 0 && userCauses[0].userId) {
+                            env.TRIGGERED_BY = userCauses[0].userId
+                        }
+
+                        currentBuild.displayName = "#${env.BUILD_NUMBER} - ${params.TARGET_BRANCH}"
+                        currentBuild.description = "Branch: ${params.TARGET_BRANCH}<br>" +
+                                                   "Commit: ${commitHash} - ${commitMsg}<br>" +
+                                                   "Triggered by: ${env.TRIGGERED_BY}"
+                    }
+                }
+            }
+        }
+
+        stage('Setup Docker Environment') {
+            steps {
+                timeout(time: 20, unit: 'MINUTES') {
+                    script {
+                        if (params.CLEAN_BUILD) {
+                            // Scoped to this project's image only - a system-wide
+                            // prune on this shared agent would collect the other
+                            // jobs' dangling images and containers too.
+                            sh '''
+                                docker compose -f docker/docker-compose.yml down --volumes --rmi local || true
+                                docker image rm -f "$DEV_IMAGE" || true
+                            '''
+                        }
+                        // Always build: an image-exists check would freeze the image
+                        // at whatever docker/ contents it was first built from, so
+                        // Dockerfile changes would "pass CI" without ever running.
+                        // The layer cache makes the no-change case cheap.
+                        def buildArgs = params.CLEAN_BUILD ? '--no-cache' : ''
+                        sh "docker compose -f docker/docker-compose.yml build ${buildArgs} dojo-dev"
+                        sh '''
+                            echo "=== Testing Environment ==="
+                            docker compose -f docker/docker-compose.yml run --rm dojo-dev bash -c "
+                                make --version | head -1
+                                uv --version
+                                python --version
+                            "
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Scaffold Validation') {
+            steps {
+                timeout(time: 15, unit: 'MINUTES') {
+                    sh '''
+                        echo "=== make r: uv sync + non-hardware pytest suite ==="
+                        # Clear the previous run's results BEFORE anything can fail -
+                        # post{always} ingests and archives this directory
+                        # unconditionally, and stale junit/report files would publish
+                        # the last build's green table under this build's number.
+                        rm -rf source/tests/output
+                        docker compose -f docker/docker-compose.yml run --rm dojo-dev make r
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            echo "Build ${currentBuild.result ?: 'SUCCESS'} for branch ${params.TARGET_BRANCH}"
+            // Jenkins' native Test Result page reads junit.xml directly - unlike
+            // report.html it isn't subject to the artifact browser's CSP (dojo
+            // ADR 001), so pass/fail/duration show up regardless of that setting.
+            junit testResults: 'source/tests/output/junit.xml', allowEmptyResults: true
+            archiveArtifacts artifacts: 'source/tests/output/**', allowEmptyArchive: true
+        }
+
+        cleanup {
+            sh 'docker compose -f docker/docker-compose.yml down --remove-orphans || true'
+        }
+    }
+}

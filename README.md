@@ -29,6 +29,18 @@ To validate dojo's own scaffold (uv installs cleanly, baseline tests pass):
 make r
 ```
 
+To run that same check from a clean machine instead of your own — the container starts from a bare
+Ubuntu image, so it also proves `source/tests/automated/readme.md`'s setup steps still work:
+
+```
+docker compose -f docker/docker-compose.yml build dojo-dev
+docker compose -f docker/docker-compose.yml run --rm dojo-dev make r
+```
+
+`Jenkinsfile.docker` runs exactly those two commands in CI (the `Dojo-Docker` Jenkins job). It is
+dojo's own pipeline — not `source/Jenkinsfile`, which is the HIL template consuming projects copy.
+See `docs/adr/002-containerize-scaffold-validation.md`.
+
 ## docs/
 
 All documentation lives under `docs/`. See `AGENTS.md` for numbering and heading format rules, and
