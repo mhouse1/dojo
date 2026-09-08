@@ -44,6 +44,14 @@ def test_pre_test(step):
     step("checking paramiko, serial, subprocess are importable")
     import paramiko, serial, subprocess
 
+    # power_control is the scaffold's own module, not a third-party dependency, but the
+    # same reasoning applies: importing it here means a syntax error or a bad import in
+    # it aborts the session with one obvious fixture-health failure. test_power_control.py
+    # would also catch that as a collection error - this check is what keeps it caught if
+    # a consuming project deletes those tests but keeps the module.
+    step("checking power_control is importable")
+    import power_control
+
     # test tool versions
     import sys
     # check python version

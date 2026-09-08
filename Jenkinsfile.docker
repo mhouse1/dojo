@@ -1,0 +1,237 @@
+// Dojo scaffold-validation CI for VEDA Jenkins.
+//
+// This is dojo's OWN pipeline - not to be confused with source/Jenkinsfile,
+// which is the placeholder-laden HIL template that consuming projects copy.
+// This one validates the thing dojo ships: it runs `make r` (uv sync + the
+// non-hardware pytest suite) inside a container built from nothing but Ubuntu,
+// so a green build proves the scaffold's documented setup still works on a
+// machine that has never seen this repo. No target hardware is involved -
+// hardware-marked tests are deselected by `make r` itself.
+//
+// PYTHON_VERSIONS turns the run into a matrix over interpreters (dojo ADR 003).
+// Left empty - the default - it is a single run against whatever
+// source/tests/automated/.python-version pins, so the per-commit cost is one
+// build. Set it to e.g. "3.10,3.12,3.14" to check the supported range.
+//
+// Pipeline shape (agent any, Docker-first, SSH-deploy-key checkout, stage
+// timeouts) follows riker/kobayashi_maru's Jenkinsfile.docker so every job on
+// this controller reads the same way. See
+// docs/adr/002-containerize-scaffold-validation.md.
+
+// Parse the PYTHON_VERSIONS parameter into cells. An empty spec yields a single
+// cell with an empty version, which is the signal to let the image fall back to
+// .python-version - deliberately not the string "3.14", which would be a second
+// copy of the pinned version, free to drift from the real one.
+def requestedVersions(spec) {
+    def versions = []
+    for (String entry : (spec ?: '').split(',')) {
+        def trimmed = entry.trim()
+        if (trimmed) {
+            versions.add(trimmed)
+        }
+    }
+    if (versions.isEmpty()) {
+        versions.add('')
+    }
+    return versions
+}
+
+pipeline {
+    agent any
+
+    parameters {
+        string(
+            name: 'TARGET_BRANCH',
+            defaultValue: 'main',
+            description: 'Git branch to validate'
+        )
+        string(
+            name: 'PYTHON_VERSIONS',
+            defaultValue: '',
+            description: 'Comma-separated interpreters to validate against, e.g. "3.10,3.12,3.14". Empty (default) runs once against whatever source/tests/automated/.python-version pins.'
+        )
+        booleanParam(
+            name: 'CLEAN_BUILD',
+            defaultValue: false,
+            description: 'Force a no-cache Docker rebuild - use when validating that the scaffold installs from scratch, not from cached uv/apt layers'
+        )
+    }
+
+    environment {
+        // NB: deliberately not named COMPOSE_FILE - docker compose reads that
+        // variable itself, which would make every command in this file depend on
+        // an implicit default instead of the -f flag it visibly passes.
+        DEV_IMAGE = 'dojo-dev'
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        disableConcurrentBuilds()
+        timeout(time: 60, unit: 'MINUTES')
+        timestamps()
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                timeout(time: 10, unit: 'MINUTES') {
+                    script {
+                        // The job's SCM must use an SSH deploy-key credential, not
+                        // HTTPS - GitHub has rejected password auth for git since
+                        // 2021, and the failure mode is an immediate elapsed=0s
+                        // build failure that looks like a Jenkins problem.
+                        checkout([
+                            $class: 'GitSCM',
+                            branches: [[name: "${params.TARGET_BRANCH}"]],
+                            userRemoteConfigs: scm.userRemoteConfigs
+                        ])
+                        sh 'git log --oneline -5'
+
+                        def commitMsg  = sh(script: 'git log -1 --pretty=%B', returnStdout: true).trim()
+                        def commitHash = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+
+                        // Attestation: who started this run, via Jenkins' own Cause
+                        // API (no extra plugin needed) - the practice dojo's own
+                        // source/Jenkinsfile template prescribes.
+                        def userCauses = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')
+                        env.TRIGGERED_BY = 'unknown (non-interactive trigger)'
+                        if (userCauses && userCauses.size() > 0 && userCauses[0].userId) {
+                            env.TRIGGERED_BY = userCauses[0].userId
+                        }
+
+                        def versionLabel = params.PYTHON_VERSIONS?.trim() ?: 'pinned'
+                        currentBuild.displayName = "#${env.BUILD_NUMBER} - ${params.TARGET_BRANCH} - py ${versionLabel}"
+                        currentBuild.description = "Branch: ${params.TARGET_BRANCH}<br>" +
+                                                   "Commit: ${commitHash} - ${commitMsg}<br>" +
+                                                   "Python: ${versionLabel}<br>" +
+                                                   "Triggered by: ${env.TRIGGERED_BY}"
+                    }
+                }
+            }
+        }
+
+        stage('Setup Docker Environment') {
+            steps {
+                timeout(time: 30, unit: 'MINUTES') {
+                    script {
+                        if (params.CLEAN_BUILD) {
+                            // Scoped to this project's images only - a system-wide
+                            // prune on this shared agent would collect the other
+                            // jobs' dangling images and containers too.
+                            sh '''
+                                docker compose -f docker/docker-compose.yml down --volumes --rmi local || true
+                                docker image ls --format '{{.Repository}}:{{.Tag}}' \
+                                    | grep "^${DEV_IMAGE}:" \
+                                    | xargs -r docker image rm -f || true
+                            '''
+                        }
+                        // Built sequentially rather than inside the parallel cells
+                        // below: concurrent `docker compose build` runs against one
+                        // compose project race on the shared network/state, and the
+                        // layer cache makes each extra interpreter cheap anyway
+                        // (only the interpreter download and venv layers differ).
+                        //
+                        // Always build: an image-exists check would freeze the image
+                        // at whatever docker/ contents it was first built from, so
+                        // Dockerfile changes would "pass CI" without ever running.
+                        def buildArgs = params.CLEAN_BUILD ? '--no-cache' : ''
+                        for (version in requestedVersions(params.PYTHON_VERSIONS)) {
+                            withEnv(["PYTHON_VERSION=${version}"]) {
+                                sh "docker compose -f docker/docker-compose.yml build ${buildArgs} dojo-dev"
+                                sh '''
+                                    echo "=== Testing Environment (PYTHON_VERSION='${PYTHON_VERSION}') ==="
+                                    docker compose -f docker/docker-compose.yml run --rm dojo-dev bash -c "
+                                        make --version | head -1
+                                        uv --version
+                                        python --version
+                                    "
+                                '''
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Scaffold Validation') {
+            steps {
+                timeout(time: 30, unit: 'MINUTES') {
+                    script {
+                        // Cleared once, here, rather than inside the cells: a cell
+                        // clearing source/tests/output* would delete the results of
+                        // whichever sibling cell is running alongside it. Clearing
+                        // before anything can fail matters because post{always}
+                        // ingests and archives these directories unconditionally,
+                        // and stale junit files would publish a previous build's
+                        // green table under this build's number.
+                        sh 'rm -rf source/tests/output source/tests/output-*'
+
+                        def cells = [:]
+                        for (version in requestedVersions(params.PYTHON_VERSIONS)) {
+                            def pythonVersion = version
+                            def label = pythonVersion ?: 'pinned'
+                            cells["python-${label}"] = {
+                                withEnv(["PYTHON_VERSION=${pythonVersion}",
+                                         "CELL_LABEL=${label}"]) {
+                                    sh '''#!/bin/bash
+                                        # pipefail: `make r | tee` would otherwise report tee's
+                                        # exit status and turn a failing test run green.
+                                        set -eo pipefail
+
+                                        OUT="source/tests/output-${CELL_LABEL}"
+                                        mkdir -p "${OUT}"
+
+                                        echo "=== make r on Python '${PYTHON_VERSION:-<.python-version>}' ==="
+                                        # OUTPUT_DIR: a make command-line variable, so it overrides
+                                        # the Makefile's own value and propagates to the sub-makes.
+                                        # Each cell needs its own, or parallel cells overwrite one
+                                        # another's junit.xml in the shared workspace.
+                                        #
+                                        # PYTEST_ADDOPTS: no:cacheprovider stops the cells racing on
+                                        # the one .pytest_cache; junit_suite_name keeps their results
+                                        # distinguishable after Jenkins merges every junit.xml.
+                                        docker compose -f docker/docker-compose.yml run --rm \
+                                            -e PYTEST_ADDOPTS="-p no:cacheprovider -o junit_suite_name=python-${CELL_LABEL}" \
+                                            dojo-dev make r OUTPUT_DIR="/workspace/${OUT}" \
+                                            2>&1 | tee "${OUT}/make-r.log"
+
+                                        # Guard against the silent failure this whole matrix exists
+                                        # to avoid: a cell that re-syncs itself to a different
+                                        # interpreter still passes, and reports a pass for a version
+                                        # it never ran. Trust pytest's own header, not the request.
+                                        expected="${PYTHON_VERSION:-$(cat source/tests/automated/.python-version)}"
+                                        if ! grep -qE "^platform .* -- Python ${expected}\\." "${OUT}/make-r.log"; then
+                                            echo "ERROR: expected Python ${expected}, but the suite ran on:"
+                                            grep -E "^platform " "${OUT}/make-r.log" || echo "  (no pytest platform line found)"
+                                            exit 1
+                                        fi
+                                        echo "verified: ran on Python ${expected}"
+                                    '''
+                                }
+                            }
+                        }
+                        parallel cells
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            echo "Build ${currentBuild.result ?: 'SUCCESS'} for branch ${params.TARGET_BRANCH}"
+            // Jenkins' native Test Result page reads junit.xml directly - unlike
+            // report.html it isn't subject to the artifact browser's CSP (dojo
+            // ADR 001), so pass/fail/duration show up regardless of that setting.
+            // The glob covers every matrix cell; junit_suite_name (set per cell
+            // above) is what keeps their identically-named tests apart.
+            junit testResults: 'source/tests/output-*/junit.xml', allowEmptyResults: true
+            archiveArtifacts artifacts: 'source/tests/output-*/**', allowEmptyArchive: true
+        }
+
+        cleanup {
+            sh 'docker compose -f docker/docker-compose.yml down --remove-orphans || true'
+        }
+    }
+}

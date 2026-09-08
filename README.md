@@ -29,6 +29,22 @@ To validate dojo's own scaffold (uv installs cleanly, baseline tests pass):
 make r
 ```
 
+To run that same check from a clean machine instead of your own — the container starts from a bare
+Ubuntu image, so it also proves `source/tests/automated/readme.md`'s setup steps still work:
+
+```
+docker compose -f docker/docker-compose.yml build dojo-dev
+docker compose -f docker/docker-compose.yml run --rm dojo-dev make r
+```
+
+Any other interpreter needs no edit — `PYTHON_VERSION=3.12` in front of both commands runs the
+whole check on 3.12. The scaffold develops on 3.14 and supports `>=3.10`; see
+`docs/adr/003-python-version-baseline-and-matrix.md`.
+
+`Jenkinsfile.docker` runs exactly those two commands in CI (the `Dojo-Docker` Jenkins job). It is
+dojo's own pipeline — not `source/Jenkinsfile`, which is the HIL template consuming projects copy.
+See `docs/adr/002-containerize-scaffold-validation.md`.
+
 ## docs/
 
 All documentation lives under `docs/`. See `AGENTS.md` for numbering and heading format rules, and

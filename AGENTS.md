@@ -116,6 +116,20 @@ Files follow the standard sequential numbering rule: `001-requirement-name.md`, 
 Use `Draft` status for new requirements; update to `Active` once reviewed and baselined. If a requirement is obsoleted, update the status to `Obsolete` and note the reason — do not delete the file.
 
 
+## Research Documents
+
+Research and evaluation notes live in `docs/research/`. Each file covers the investigation of one
+topic, component, or approach — what was found and what it implies, not a decision. When research
+leads to a decision, record the decision as an ADR under `docs/adr/` and reference the research
+document; when it leads to a build, record the design under `docs/hldd/`.
+
+Files follow the standard sequential numbering rule: `001-topic-name.md`, `002-…`, etc.
+
+Use `Draft` status while research is ongoing; update to `Active` once the findings are reviewed. If
+research is superseded by later findings, update the status to `Obsolete` and reference the newer
+document — do not delete the file.
+
+
 ## Roadmap — Planned Features
 
 Planned and future features are tracked in `docs/roadmap/`. Each entry is a lightweight document describing what is planned and why — not a full design. Use `docs/hldd/` for detailed high-level design once work is underway.

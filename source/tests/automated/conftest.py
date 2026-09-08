@@ -125,7 +125,6 @@ def step(record_property, request):
     def _step(message):
         print(f"step: {message}")
         record_property("step", message)
-        request.node._store.setdefault("hil_steps", []).append(message)
     return _step
 
 ##################################
